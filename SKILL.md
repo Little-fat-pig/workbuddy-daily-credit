@@ -1,6 +1,6 @@
 ---
 name: workbuddy-daily-credit
-description: 自动领取 WorkBuddy 每日登录奖励 100 积分（依赖 windows-mcp 桌面自动化）。当用户说"自动领每日积分 / 每日签到 / 帮我设置每天领积分"时使用。只领每日 100，不碰其他成长任务、盲盒、升级或投稿。
+description: 自动领取 WorkBuddy 每日登录奖励 100 积分（依赖 windows-mcp 桌面自动化）。当用户说"自动领取积分 / 自动领每日积分 / 每日签到 / 帮我设置每天领积分 / 每天自动领积分"时使用。只领每日 100，不碰其他成长任务、盲盒、升级或投稿。注意：本技能需先存在于 ~/.workbuddy/skills/ 才会被加载（从 GitHub 克隆或解压 zip 即可），WorkBuddy 不会凭一句话自行从网上下载。
 ---
 
 # 自动领取 WorkBuddy 每日登录奖励（100 积分）
@@ -19,7 +19,7 @@ description: 自动领取 WorkBuddy 每日登录奖励 100 积分（依赖 windo
 - 自动定位 WorkBuddy 托管 Python（`<USERPROFILE>\.workbuddy\binaries\python\versions\*\python.exe`）；
 - 在其 venv 里 `pip install windows-mcp`；
 - 合并写入 `<USERPROFILE>\.workbuddy\mcp.json`。
-幂等，可重复运行。
+幂等，可重复运行；**若用户本机已有 windows-mcp，脚本会自动跳过安装、仅确认/合并 mcp.json，不会冲突或失败**（详见文末「关于已安装 windows-mcp」）。
 
 ### 第 2 步：提醒用户「信任」连接器（Agent 无法代做，必须提醒）
 装好后，**必须**让用户去 WorkBuddy 左侧「连接器」面板找到 `windows-mcp`，点「信任」启用，并**重启/新建一个会话**让 `mcp__windows-mcp__*` 工具生效。这是安全闸门，跳不过。
@@ -54,3 +54,13 @@ description: 自动领取 WorkBuddy 每日登录奖励 100 积分（依赖 windo
 
 - 依赖已登录 Windows 桌面 + 客户端自启。
 - 协议含风控条款（禁多账号/刷量），仅用于本账号正常每日奖励。
+
+## 关于用户本机已安装 windows-mcp（不会冲突）
+
+很多用户可能早已自己装过 windows-mcp。本技能的安装脚本对此是**安全、幂等**的，不会失败也不会冲突：
+
+- 脚本只认 WorkBuddy 托管 Python 的 venv（`~/.workbuddy/binaries/python/envs/default`）。若其中已存在 `windows-mcp.exe`，直接跳过安装；不存在才 `pip install`。
+- `mcp.json` 里名为 `windows-mcp` 的条目用 `-Force` 合并：若用户原有同名条目（无论指向哪），会被本技能的配置覆盖——这本就是期望结果（统一由 WorkBuddy 托管 venv 托管）。用户原有的其他安装位置不会被改动或删除。
+- windows-mcp 以 stdio 子进程方式由 WorkBuddy 拉起，不是网络服务，**不存在端口冲突**。
+- 若用户此前已「信任」过 windows-mcp 连接器，因连接器名相同，信任状态保留，装完技能无需再次信任，体验更顺。
+- 唯一副作用：可能把 `mcp.json` 里 `windows-mcp` 的 command 路径改为托管 venv。这是预期行为。若想升级到最新版，可手动在托管 venv 里 `pip install --upgrade windows-mcp`（脚本在已存在时会跳过升级）。
