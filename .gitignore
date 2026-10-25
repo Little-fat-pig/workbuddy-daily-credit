@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Windows
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# 用户本地配置（不要提交，保留 config.example.json 作为模板）
+config.json
+*.token
