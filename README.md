@@ -2,6 +2,8 @@
 
 让 WorkBuddy 每天自动领取「每日登录奖励 100 积分」的可分享技能。基于 `windows-mcp` 桌面自动化，无需人工点击。三步即可用：装依赖 → 信任连接器 → 建定时任务。
 
+🌟 **开源地址**：https://github.com/Little-fat-pig/workbuddy-daily-credit （MIT 许可证，欢迎 Star / Fork / PR）
+
 ## 目录
 
 ```
@@ -32,7 +34,7 @@ workbuddy-daily-credit/
 ## 怎么分享 / 开源
 
 - **给个人**：把文件夹或 zip 发给对方，放其 `~/.workbuddy/skills/` 即可（见上）。
-- **开源（GitHub）**：本仓库即为此用途。克隆到本地 skills 目录，或 `install skill` 后使用。
+- **开源（GitHub）**：已发布在 https://github.com/Little-fat-pig/workbuddy-daily-credit 。克隆到本地 skills 目录，或 `install skill`（若平台支持）后使用。
 - 对方首次使用前都需：安装 windows-mcp（技能自动做）+ 在连接器面板信任 + 重启会话。
 
 ## 前提与限制
