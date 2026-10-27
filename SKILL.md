@@ -1,6 +1,6 @@
 ---
 name: workbuddy-daily-credit
-description: 自动领取 WorkBuddy 每日登录奖励 100 积分（依赖 windows-mcp 桌面自动化）。当用户说"自动领取积分 / 自动领每日积分 / 每日签到 / 帮我设置每天领积分 / 每天自动领积分"时使用。只领每日 100，不碰其他成长任务、盲盒、升级或投稿。安装即用：本技能自带一键安装脚本与自检脚本，已内置全部已知故障的修复方式，无需重新调试。注意：本技能需先存在于 ~/.workbuddy/skills/ 才会被加载（从 GitHub 克隆或解压 zip 即可），WorkBuddy 不会凭一句话自行从网上下载。
+description: 自动领取 WorkBuddy 每日登录奖励 100 积分（依赖 windows-mcp 桌面自动化，另含「UI 树读不到时」的 OCR 兜底方案）。当用户说"自动领取积分 / 自动领每日积分 / 每日签到 / 帮我设置每天领积分 / 每天自动领积分"时使用。只领每日 100，不碰其他成长任务、盲盒、升级或投稿。安装即用：本技能自带一键安装脚本、自检脚本与 OCR 兜底脚本，已内置全部已知故障的修复方式，无需重新调试。注意：本技能需先存在于 ~/.workbuddy/skills/ 才会被加载（从 GitHub 克隆或解压 zip 即可），WorkBuddy 不会凭一句话自行从网上下载。
 ---
 
 # 自动领取 WorkBuddy 每日登录奖励（100 积分）
@@ -28,6 +28,60 @@ WorkBuddy 客户端窗口**左下角**有一张「Buddy加油站」小卡片：
 | 去逆向 bearer token / 读 Electron leveldb / 解 `keyblob` | 同上，纯属绕远路 |
 | 做截图裁剪 / 像素级放大来"验证" | 验证只看：按钮是否消失 + 余额数字 |
 | 用 PowerShell 的 `Set-Content -Encoding utf8` 写 `mcp.json` | PS 5.1 会写 UTF-8 BOM → WorkBuddy 解析失败并**静默忽略整个文件** → 「配了但永远不生效」 |
+
+---
+
+## 方案 B：`Snapshot` 读不到按钮时改用 OCR（Electron 客户端必看）
+
+`Snapshot(use_ui_tree:true)` 能按文字定位按钮的前提是 **Windows UI 树里有控件**。
+WorkBuddy 是 Electron 应用，在部分机器上 `window "WorkBuddy"` 下面**是空的**（只有窗口外壳），
+这时按文字匹配永远失败 —— 这不是配置问题，重装、重启、重新信任都不会好。
+
+**判定方法**：`Snapshot` 结果里 `window "WorkBuddy"` 没有任何子节点，
+而同一次快照里微信、任务栏都能正常展开 → 直接切方案 B，不要再折腾 windows-mcp。
+
+### 用 `scripts/claim_ocr.py`（2026-10-27 本机实测可领）
+
+```powershell
+# 只看状态，不点击（安全，先跑这个）
+"<venv>\Scripts\python.exe" "<技能目录>\scripts\claim_ocr.py" --dry
+# 只读账号面板余额
+"<venv>\Scripts\python.exe" "<技能目录>\scripts\claim_ocr.py" --balance
+# 正常领取
+"<venv>\Scripts\python.exe" "<技能目录>\scripts\claim_ocr.py"
+```
+
+流程：`PrintWindow` 截图（不受遮挡影响）→ Windows 自带 OCR（`scripts/ocr.ps1`，
+中文 `zh-Hans-CN`，**无需安装任何东西**）→ 只认「立即领取」四个字 → 真实点击 →
+再 OCR 左下角账号面板的「积分余额」做前后核对。
+
+### 方案 B 的三个坑（都已写进脚本，别重复踩）
+
+| 坑 | 现象 | 脚本里怎么处理的 |
+|---|---|---|
+| **DPI 缩放** | 125% 缩放下 `GetWindowRect` 返回逻辑像素、截图是物理像素，点击坐标整体偏移，表现就是"点了没反应" | 启动即 `SetProcessDpiAwareness(2)`，让矩形与截图统一到物理像素 |
+| **卡片自动轮播** | 左下角卡片轮流显示「每日可领100积分 / 做任务赢积分 / 1024造物挑战…」，盲点会点到「立即前往」「立即投稿」 | 每轮先 OCR，**只有出现「立即领取」才点**，否则继续轮询，绝不碰别的按钮 |
+| **余额读不准** | 面板数字小，OCR 会偶发漏位（如 3,960.71 读成 395.95） | 灰度 + 自动对比度 + 2 倍放大；多次读数取「数字位数最多」的一次；按该面板固定两位小数还原 |
+
+### 领取成功的判据（按可靠性排序）
+
+1. 点击后卡片上的「立即领取」**消失**（主判据）
+2. 账号面板余额 +100 左右（**仅作佐证**：同时段使用 AI 也会扣积分，不能只看差值）
+3. `state.json` 的 `status`：`claimed` / `already_claimed` / `claimed_unverified`
+
+### 免管理员的定时（登录账号不在管理员组时用这个）
+
+`Register-ScheduledTask` / `schtasks` / COM `Schedule.Service` 在普通用户下会被拒绝。
+改用「登录自启 + 常驻调度器」，效果等价且重启后自动恢复：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install_autostart.ps1"
+# 卸载
+powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install_autostart.ps1" -Uninstall
+```
+
+执行时间读技能目录 `config.json` 的 `claimTime`（缺省 `08:00`）；失败每 20 分钟重试、最多 8 次。
+它与 WorkBuddy 内部定时任务可同时存在：`claim_ocr.py` 自带单实例互斥量，不会重复点击。
 
 ---
 
@@ -96,7 +150,12 @@ powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install.ps1"
 | 领取点了没反应 | 点击落到上层窗口（Chrome/远程会话遮挡） | 跑 `scripts/focus_workbuddy.py` 再点 |
 | 定时任务报「找不到立即领取」 | 今天已领过 / 入口未出现 | 属正常，任务应如实汇报「今日已领」并结束 |
 | `Add-Type 被安全策略拦截` | WorkBuddy 拦截内联 .NET 编译 | 用 `scripts/focus_workbuddy.py`（纯 ctypes，无此问题） |
-| `sc.exe` / 注册表 `Run` 被拦 | 沙箱策略 | 不需要系统服务；用启动文件夹 + .vbs 即可 |
+| `sc.exe` / 注册表 `Run` 被拦 | 沙箱策略 | 不需要系统服务；用 `scripts/install_autostart.ps1`（登录自启 + 常驻调度） |
+| `Snapshot` 里 `window "WorkBuddy"` **没有子节点** | Electron 客户端的 UI 树为空，按文字定位根本无法工作 | 切**方案 B**：`scripts/claim_ocr.py`（截图 + OCR） |
+| 点了按钮没反应 | 125% DPI 缩放：矩形是逻辑像素、截图是物理像素，坐标偏 1.25 倍 | 方案 B 已内置 `SetProcessDpiAwareness(2)`；自己写脚本必须加 |
+| 点到「立即前往」「立即投稿」 | 左下角卡片自动轮播，盲点落到别的幻灯片 | 用方案 B：OCR 到「立即领取」才点，其余一律不点 |
+| 想确认到底领没领、余额多少 | 客户端主界面**不显示**积分余额 | 点左下角头像 → 面板「积分余额」；或 `claim_ocr.py --balance` |
+| 系统定时任务建不了（拒绝访问） | 登录账号不在管理员组，计划任务接口全被拒 | 用 `scripts/install_autostart.ps1` |
 
 ---
 
@@ -110,5 +169,7 @@ powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install.ps1"
 
 ## 限制
 
-- 依赖已登录的 Windows 桌面会话 + WorkBuddy 客户端自启。
+- 依赖已登录的 Windows 桌面会话 + WorkBuddy 客户端自启；**锁屏状态下任何鼠标点击都无效**，
+  方案 B 会自动重试（每 20 分钟，最多 8 次）。
+- 方案 A 需要连接器信任；**方案 B 不需要**（它自己截图、自己点，绕开连接器）。
 - 协议含风控条款（禁多账号/刷量），仅用于本账号正常每日奖励。
