@@ -17,6 +17,9 @@ Snapshot 读不到按钮 —— 这时用本脚本：截图（PrintWindow）+ Wi
 3. 定位靠 OCR 文字，不靠硬编码坐标：
    左下角「Buddy加油站」卡片是多张自动轮播，只有出现「立即领取」四个字才点，
    绝不点「立即前往」「立即投稿」（守安全红线）。
+   OCR 可能把简体识别成繁体（「立即领取」→「立即領取」），故所有 OCR 文本先经
+   norm_text() 繁→简归一化，否则按钮永远匹配不上、被误判成「今日已领」（静默漏领）。
+   卡片区若读到「退出登录/意见反馈」，说明账号面板挡住了卡片 → close_overlays() 先 ESC 清掉。
 4. 验证靠账号面板余额：点左下角账号看「积分余额」，领前领后对比。
 
 用法
@@ -66,6 +69,29 @@ EXE_CANDIDATES = [
 CLAIM_TEXT = "立即领取"
 TITLE_HINT_A = "每日可领"
 TITLE_HINT_B = "100"
+
+# Windows OCR 有时把简体字识别成繁体（实测「立即领取」→「立即領取」），
+# 导致按钮永远匹配不上、被误判成「今日已领」。统一归一化后再匹配。
+TRAD2SIMP = str.maketrans({
+    "領": "领", "積": "积", "餘": "余", "額": "额", "員": "员",
+    "開": "开", "級": "级", "獎": "奖", "對": "对", "這": "这",
+    "個": "个", "點": "点", "擊": "击", "確": "确", "認": "认",
+    "暫": "暂", "無": "无", "務": "务", "進": "进",
+})
+
+# 弹层特征词：出现这些说明左下角被账号面板/子菜单挡住，卡片必然检测不到
+OVERLAY_HINTS = ("积分余额", "退出登录", "意见反馈", "检查更新", "外观记忆", "外观上新", "设置")
+
+
+def norm_text(s):
+    """OCR 文本归一化：繁体→简体，去空白与全角空格。"""
+    if not s:
+        return ""
+    return s.translate(TRAD2SIMP).replace("\u3000", "").replace(" ", "")
+
+
+def looks_like_overlay(txt):
+    return any(k in (txt or "") for k in OVERLAY_HINTS)
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
@@ -334,9 +360,9 @@ def ocr(img, name="roi", scale=2.0, gray=False):
     for d in data:
         if not isinstance(d, dict) or "text" not in d:
             continue
-        words.append({"text": d["text"], "x": d["x"] / scale, "y": d["y"] / scale,
+        words.append({"text": norm_text(d["text"]), "x": d["x"] / scale, "y": d["y"] / scale,
                       "w": d["w"] / scale, "h": d["h"] / scale})
-    return words
+    return [w for w in words if w["text"]]
 
 
 def char_cells(words):
@@ -452,6 +478,7 @@ def read_balance(hwnd, tag="bal"):
     """点开左下角账号面板读「积分余额」，读完关闭面板。
 
     - 面板可能本来就是开着的（上次异常退出），所以先检测再决定是否点头像
+    - 面板停在子菜单（无「积分余额」）时，先 ESC 再点头像
     - OCR 偶发漏位，多次读数取「数字位数最多」的那次；两次一致即提前采用
     """
     cands = []
@@ -475,6 +502,12 @@ def read_balance(hwnd, tag="bal"):
         else:
             if opened:
                 break
+            # 有弹层但不是余额面板（子菜单）→ 先 ESC 收起，再点头像
+            if looks_like_overlay(joined_text(words)):
+                log("账号面板停在子菜单，先按 ESC 收起")
+                press_esc()
+                time.sleep(0.6)
+                continue
             rect = get_rect(hwnd)
             click(rect[0] + W * 0.040, rect[1] + H * 0.958)
             time.sleep(1.4)
@@ -514,9 +547,42 @@ def detect_card(hwnd, idx):
     words = ocr(crop, name="card", scale=2.0)
     txt = joined_text(words)
     btn = find_seq(words, CLAIM_TEXT)
+    # 标题是「每日可领100积分」却没检测到按钮 → 用灰度增强再试一次，
+    # 避免因 OCR 质量问题把「还该领」误判成「已领」。
+    if not btn and ((TITLE_HINT_A in txt) or (TITLE_HINT_B in txt)):
+        words2 = ocr(crop, name="card_g", scale=3.0, gray=True)
+        txt2 = joined_text(words2)
+        btn2 = find_seq(words2, CLAIM_TEXT)
+        if btn2:
+            words, txt, btn = words2, txt2, btn2
+        elif txt2:
+            txt = txt2
     if btn:
         btn = {"cx": btn["cx"] + x0, "cy": btn["cy"] + y0, "w": btn["w"], "h": btn["h"]}
     return txt, btn, img.size, (x0, y0)
+
+
+def close_overlays(hwnd, tries=3):
+    """按 ESC 关掉账号面板/子菜单等弹层。
+
+    真实踩到的坑：面板停在「外观/意见反馈/退出登录」子菜单时，既读不到
+    「积分余额」，又遮住加油站卡片，会被误判成「今日已领」→ 静默漏领。
+    """
+    closed = False
+    for i in range(tries):
+        img = capture(hwnd)
+        W, H = img.size
+        roi = img.crop((0, int(H * 0.10), int(W * 0.40), H))
+        txt = joined_text(ocr(roi, name="ovl_%d" % i, scale=2.0))
+        if not looks_like_overlay(txt):
+            if i == 0:
+                return False
+            break
+        log("检测到弹层，按 ESC 关闭（第%d次）: %s" % (i + 1, txt[:40]))
+        press_esc()
+        time.sleep(0.7)
+        closed = True
+    return closed
 
 
 def prune_shots(days=7):
@@ -580,13 +646,19 @@ def main():
     time.sleep(0.8)
     focus(hwnd)
 
+    # 开局先清掉可能残留的弹层（上次异常退出会留下账号面板挡住卡片）
+    close_overlays(hwnd)
+
     clicked = False
     after_gone = False
     seen = []
+    title_seen = 0
     for i in range(args.tries):
         txt, btn, size, off = detect_card(hwnd, i)
         seen.append(txt[:40])
-        hit_title = (TITLE_HINT_A in txt) or (TITLE_HINT_B in txt)
+        hit_title = (TITLE_HINT_A in txt) or (TITLE_HINT_B in txt) or (CLAIM_TEXT in txt)
+        if hit_title:
+            title_seen += 1
         log("第%d次检测: 按钮=%s 标题命中=%s 文本=%s" %
             (i + 1, "立即领取" if btn else "-", hit_title, txt.replace("\n", " ")[:60]))
         if btn and (hit_title or True):
@@ -605,6 +677,11 @@ def main():
             after_gone = btn2 is None
             log("点击后卡片文本=%s 按钮=%s" % (txt2.replace("\n", " ")[:60], "已消失" if after_gone else "仍在"))
             break
+        # 没检测到按钮，且画面看着像被弹层挡住 → 清弹层后继续下一轮（避免误判已领）
+        if looks_like_overlay(txt):
+            log("卡片区被弹层遮挡，清理后重试")
+            close_overlays(hwnd)
+            continue
         time.sleep(args.interval)
 
     status = "unknown"
@@ -628,8 +705,13 @@ def main():
             status = "claimed_unverified"
         log("判定依据: 按钮消失=%s 余额差值=%s → %s" % (after_gone, delta, status))
     else:
-        status = "already_claimed"
-        log("整轮检测未出现「立即领取」→ 判定今日已领取")
+        # 关键：出现过「每日可领100积分」却没能点下去，不能算「已领」，否则会静默漏领
+        if title_seen > 0:
+            status = "need_manual"
+            log("检测到 %d 次可领卡片但按钮未能定位 → 状态 need_manual（不算已领）" % title_seen)
+        else:
+            status = "already_claimed"
+            log("整轮检测未出现「立即领取」→ 判定今日已领取")
 
     write_state(ok=True, status=status, clicked=clicked, balance_before=bal_before,
                 balance_after=bal_after, ts=datetime.now().isoformat(timespec="seconds"),

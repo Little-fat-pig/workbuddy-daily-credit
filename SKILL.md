@@ -154,6 +154,8 @@ powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install.ps1"
 | `Snapshot` 里 `window "WorkBuddy"` **没有子节点** | Electron 客户端的 UI 树为空，按文字定位根本无法工作 | 切**方案 B**：`scripts/claim_ocr.py`（截图 + OCR） |
 | 点了按钮没反应 | 125% DPI 缩放：矩形是逻辑像素、截图是物理像素，坐标偏 1.25 倍 | 方案 B 已内置 `SetProcessDpiAwareness(2)`；自己写脚本必须加 |
 | 点到「立即前往」「立即投稿」 | 左下角卡片自动轮播，盲点落到别的幻灯片 | 用方案 B：OCR 到「立即领取」才点，其余一律不点 |
+| 明明显示「每日可领100积分」却说「今日已领」 | **Windows OCR 把简体识别成繁体**：「立即领取」→「立即**領**取」，按简体匹配失败 | v2.1.1 已内置繁→简归一化；自写脚本必须先做 `norm_text()` |
+| 卡片区 OCR 读出「退出登录/意见反馈」 | 账号面板/子菜单没关，**遮住了加油站卡片** → 被误判成已领（静默漏领） | v2.1.1 已内置 `close_overlays()` + `need_manual` 状态；出现该状态要人工看一眼 |
 | 想确认到底领没领、余额多少 | 客户端主界面**不显示**积分余额 | 点左下角头像 → 面板「积分余额」；或 `claim_ocr.py --balance` |
 | 系统定时任务建不了（拒绝访问） | 登录账号不在管理员组，计划任务接口全被拒 | 用 `scripts/install_autostart.ps1` |
 
