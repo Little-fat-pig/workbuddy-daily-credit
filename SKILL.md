@@ -156,6 +156,9 @@ powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install.ps1"
 | 点到「立即前往」「立即投稿」 | 左下角卡片自动轮播，盲点落到别的幻灯片 | 用方案 B：OCR 到「立即领取」才点，其余一律不点 |
 | 明明显示「每日可领100积分」却说「今日已领」 | **Windows OCR 把简体识别成繁体**：「立即领取」→「立即**領**取」，按简体匹配失败 | v2.1.1 已内置繁→简归一化；自写脚本必须先做 `norm_text()` |
 | 卡片区 OCR 读出「退出登录/意见反馈」 | 账号面板/子菜单没关，**遮住了加油站卡片** → 被误判成已领（静默漏领） | v2.1.1 已内置 `close_overlays()` + `need_manual` 状态；出现该状态要人工看一眼 |
+| 定时任务日志只有 `ModuleNotFoundError: No module named 'encodings'` / `Could not find platform independent libraries` | 继承了错误的 `PYTHONHOME`/`PYTHONPATH`，解释器连标准库都找不到（交互终端里跑却正常） | v2.1.2 的 `scheduler.py` 已 `clean_env()`；自己写调度器必须剔除这两个变量 |
+| 定时任务里 `OCR 调用失败 [WinError 2]`，卡片文本全空 | 定时环境 **PATH 不全**，`powershell` 解析不到 | v2.1.2 已用 `find_ps()` 取绝对路径；不要用裸 `"powershell"` |
+| 同时跑起两个调度器、日志互相覆盖 | 命名互斥量在「自启 + 手动启动」并存时不可靠 | v2.1.2 改为锁文件 + PID 存活检查（`runner.lock`） |
 | 想确认到底领没领、余额多少 | 客户端主界面**不显示**积分余额 | 点左下角头像 → 面板「积分余额」；或 `claim_ocr.py --balance` |
 | 系统定时任务建不了（拒绝访问） | 登录账号不在管理员组，计划任务接口全被拒 | 用 `scripts/install_autostart.ps1` |
 

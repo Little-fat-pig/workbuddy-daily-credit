@@ -4,6 +4,29 @@
 
 ---
 
+## v2.1.2（2026-10-29）—— 定时任务实际没跑起来的两个环境坑
+
+### 一句话
+
+08:00 的定时任务**连领取脚本都没启动成功**，日志只有一行
+`Could not find platform independent libraries <prefix>`；换到手动跑，又变成
+`OCR 调用失败 [WinError 2]`。两个都不是业务逻辑问题，而是**定时/登录环境**与交互终端不同。
+
+### 根因与修法
+
+| # | 现象 | 真实根因 | 修法 |
+|---|---|---|---|
+| 1 | 子进程立刻退出，`ModuleNotFoundError: No module named 'encodings'` | 父进程继承了带 **PYTHONHOME/PYTHONPATH** 的环境，解释器找不到标准库 | 调度器派生子进程前 `clean_env()`：剔除 PYTHONHOME/PYTHONPATH/PYTHONSTARTUP/PYTHONEXECUTABLE；若仍报 `encodings`/`<prefix>`，自动换 `python.exe` 重试一次 |
+| 2 | OCR 全部失败、卡片文本为空 → 判「今日已领」 | 定时环境 **PATH 不全**，`subprocess.run(["powershell", ...])` 抛 WinError 2 | 新增 `find_ps()`：`shutil.which` → `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` 逐级兜底，用绝对路径调用 |
+| 3 | 登录自启起了**两个**调度器，同时到点互踢 | 命名互斥量在同一用户多进程下仍创建成功两次 | 换成**锁文件 + PID 存活检查**（`runner.lock` + `OpenProcess`/`GetExitCodeProcess`），退出时自动释放 |
+
+### 实测
+
+2026-10-29 08:15 手动执行：余额 **4141.76 → 4241.76（+100.00）**，`status=claimed`；
+随后 `WB_FORCE_RUN=1` 全链路复测通过，调度器下次执行 2026-10-30 08:00。
+
+---
+
 ## v2.1.1（2026-10-28）—— 修「明明有按钮却报今日已领」的静默漏领
 
 ### 一句话

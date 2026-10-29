@@ -35,6 +35,7 @@ import ctypes.wintypes as wt
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -319,6 +320,28 @@ def press_esc():
 CREATE_NO_WINDOW = 0x08000000
 
 
+def find_ps():
+    """定位 powershell 绝对路径。
+
+    不能只写 "powershell" 靠 PATH：定时任务/登录自启的环境里 PATH 可能不全，
+    实测抛 WinError 2（找不到文件），OCR 全失败 → 被误判成「今日已领」。
+    """
+    cands = []
+    w = shutil.which("powershell")
+    if w:
+        cands.append(w)
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    cands.append(os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))
+    cands.append(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    return "powershell"
+
+
+PS_EXE = find_ps()
+
+
 def ocr(img, name="roi", scale=2.0, gray=False):
     """对 PIL 图像做 OCR，返回 word 列表（坐标为「原图」像素坐标）。"""
     os.makedirs(TMP_DIR, exist_ok=True)
@@ -340,7 +363,7 @@ def ocr(img, name="roi", scale=2.0, gray=False):
         except Exception:
             pass
     try:
-        subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        subprocess.run([PS_EXE, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                         OCR_PS, "-ImagePath", png, "-OutFile", out],
                        capture_output=True, timeout=90, creationflags=CREATE_NO_WINDOW)
     except Exception as e:

@@ -77,30 +77,89 @@ def save_state(d):
         pass
 
 
+LOCK_PATH = os.path.join(BASE, "runner.lock")
+
+
+def _pid_alive(pid):
+    """判断 PID 是否还活着（不依赖 pywin32）。"""
+    try:
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        k32.GetExitCodeProcess(h, ctypes.byref(code))
+        k32.CloseHandle(h)
+        return code.value == 259  # STILL_ACTIVE
+    except Exception:
+        return False
+
+
 def single_instance():
-    """Local 命名互斥量（非管理员无法创建 Global 命名空间对象）。"""
-    kernel32 = ctypes.windll.kernel32
-    kernel32.SetLastError(0)
-    handle = kernel32.CreateMutexW(None, False, "Local\\WorkBuddyDailyCreditRunner")
-    err = kernel32.GetLastError()
-    if err == 183:  # ERROR_ALREADY_EXISTS
-        return None
-    return handle or True
+    """锁文件 + PID 存活检查。
+
+    之前用命名互斥量，实测在「登录自启 + 手动启动」同时发生时仍会起两份实例
+    （同名互斥量创建成功两次），两份同时到点会互踢、日志互相覆盖。
+    """
+    try:
+        if os.path.exists(LOCK_PATH):
+            try:
+                with open(LOCK_PATH, "r", encoding="utf-8") as f:
+                    old = int((f.read() or "0").strip() or 0)
+            except Exception:
+                old = 0
+            if old and old != os.getpid() and _pid_alive(old):
+                log("已有实例在运行（pid=%s），退出" % old)
+                return None
+        with open(LOCK_PATH, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        return True
+    except Exception as e:
+        log("单实例检查异常，继续运行: %s" % e)
+        return True
 
 
 def today_str():
     return datetime.now().strftime("%Y-%m-%d")
 
 
+def clean_env():
+    """清掉从父进程继承来的 Python 变量。
+
+    真实故障（2026-10-29 08:00）：子进程报
+    「Could not find platform independent libraries <prefix>」
+    「ModuleNotFoundError: No module named 'encodings'」
+    —— 环境里带了错误的 PYTHONHOME/PYTHONPATH，解释器连标准库都找不到。
+    """
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONEXECUTABLE"):
+        env.pop(k, None)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def _spawn(py, extra, env):
+    return subprocess.run([py, CLAIM] + extra, cwd=BASE, env=env,
+                          capture_output=True, timeout=900)
+
+
 def run_claim():
     pyw = PYW if os.path.exists(PYW) else sys.executable
+    pyc = os.path.join(os.path.dirname(pyw), "python.exe")
     extra = [a for a in os.environ.get("WB_CLAIM_ARGS", "").split(" ") if a.strip()]
+    env = clean_env()
     log("启动 claim_ocr.py（解释器 %s，参数 %s）" % (pyw, extra or "-"))
     try:
-        p = subprocess.run([pyw, CLAIM] + extra, cwd=BASE,
-                           capture_output=True, timeout=900)
-        out = (p.stdout or b"").decode("utf-8", "replace")
+        p = _spawn(pyw, extra, env)
         err = (p.stderr or b"").decode("utf-8", "replace")
+        # 解释器环境损坏时（encodings/<prefix>），换 python.exe 再试一次
+        if p.returncode != 0 and ("encodings" in err or "<prefix>" in err):
+            log("解释器环境异常，改用 python.exe 重试：%s" % err.strip()[:120])
+            if os.path.exists(pyc):
+                p = _spawn(pyc, extra, env)
+                err = (p.stderr or b"").decode("utf-8", "replace")
+        out = (p.stdout or b"").decode("utf-8", "replace")
         for line in out.strip().splitlines()[-6:]:
             if line.strip():
                 log("  claim| " + line.strip())
@@ -113,7 +172,8 @@ def run_claim():
         except Exception:
             pass
         log("claim 完成，退出码=%s 状态=%s" % (p.returncode, status))
-        return p.returncode == 0 and status in ("claimed", "already_claimed", "claimed_unverified")
+        return p.returncode == 0 and status in ("claimed", "already_claimed",
+                                                "claimed_unverified", "need_manual")
     except Exception as e:
         log("claim 异常: %s" % e)
         return False
@@ -130,6 +190,20 @@ def main():
     if single_instance() is None:
         log("已有实例在运行，退出")
         return 0
+    try:
+        return _main_loop()
+    finally:
+        # 退出时释放锁文件，避免下次启动被残留 PID 挡住
+        try:
+            if os.path.exists(LOCK_PATH):
+                with open(LOCK_PATH, "r", encoding="utf-8") as f:
+                    if (f.read() or "").strip() == str(os.getpid()):
+                        os.remove(LOCK_PATH)
+        except Exception:
+            pass
+
+
+def _main_loop():
     log("调度器启动，目标时间每天 %02d:%02d" % (TARGET_HOUR, TARGET_MINUTE))
     if os.environ.get("WB_FORCE_RUN") == "1":
         log("测试模式 WB_FORCE_RUN=1：立即执行一次后退出")
