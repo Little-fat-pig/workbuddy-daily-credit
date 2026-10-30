@@ -159,6 +159,8 @@ powershell -ExecutionPolicy Bypass -File "<技能目录>\scripts\install.ps1"
 | 定时任务日志只有 `ModuleNotFoundError: No module named 'encodings'` / `Could not find platform independent libraries` | 继承了错误的 `PYTHONHOME`/`PYTHONPATH`，解释器连标准库都找不到（交互终端里跑却正常） | v2.1.2 的 `scheduler.py` 已 `clean_env()`；自己写调度器必须剔除这两个变量 |
 | 定时任务里 `OCR 调用失败 [WinError 2]`，卡片文本全空 | 定时环境 **PATH 不全**，`powershell` 解析不到 | v2.1.2 已用 `find_ps()` 取绝对路径；不要用裸 `"powershell"` |
 | 同时跑起两个调度器、日志互相覆盖 | 命名互斥量在「自启 + 手动启动」并存时不可靠 | v2.1.2 改为锁文件 + PID 存活检查（`runner.lock`） |
+| 到点报 `等待窗口超时`（退出码 2） | WorkBuddy 前一晚被关掉，**冷启动要 1~2 分钟**，只等 90 秒 | v2.1.3 等待上限改 300 秒；调度器**提前 10 分钟预热**（07:50 拉起客户端） |
+| 客户端弹出 `acquire local http runtime failed: [SidecarManager] Sidecar did not become ready after 10 retries` | 客户端刚被拉起、本地 runtime 还没起来，**内部定时任务就触发了** | 不是本技能的问题，是客户端自身启动竞态；用 v2.1.3 的预热避开；另把客户端内部定时任务挪到目标时间后 45 分钟做兜底，并先读 `state.json` 判重 |
 | 想确认到底领没领、余额多少 | 客户端主界面**不显示**积分余额 | 点左下角头像 → 面板「积分余额」；或 `claim_ocr.py --balance` |
 | 系统定时任务建不了（拒绝访问） | 登录账号不在管理员组，计划任务接口全被拒 | 用 `scripts/install_autostart.ps1` |
 

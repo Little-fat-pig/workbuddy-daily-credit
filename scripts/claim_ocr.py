@@ -220,7 +220,7 @@ def get_rect(hwnd):
     return r.left, r.top, r.right, r.bottom
 
 
-def ensure_window(wait=90):
+def ensure_window(wait=300):
     hwnd = find_window()
     if hwnd:
         return hwnd

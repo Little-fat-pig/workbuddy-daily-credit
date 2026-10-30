@@ -48,8 +48,60 @@ def claim_time():
 
 
 TARGET_HOUR, TARGET_MINUTE = claim_time()
+WARMUP_HOUR = TARGET_HOUR
+WARMUP_MINUTE = (TARGET_MINUTE - 10) % 60
+if TARGET_MINUTE < 10:
+    WARMUP_HOUR = (TARGET_HOUR - 1) % 24
 MAX_RETRY = 8
 RETRY_GAP = 20 * 60
+
+
+def _wb_exe():
+    """定位 WorkBuddy.exe：优先 config.json 的 workbuddyExe，其次常见路径。"""
+    for p in (os.path.join(os.path.dirname(BASE), "config.json"),
+              os.path.join(BASE, "config.json")):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                v = str(json.load(f).get("workbuddyExe", "")).strip()
+            if v and os.path.exists(v):
+                return v
+        except Exception:
+            continue
+    for p in (r"D:\WorkBuddy\WorkBuddy.exe",
+              os.path.expandvars(r"%LOCALAPPDATA%\Programs\WorkBuddy\WorkBuddy.exe"),
+              os.path.expandvars(r"%PROGRAMFILES%\WorkBuddy\WorkBuddy.exe")):
+        if os.path.exists(p):
+            return p
+    return ""
+
+
+WB_EXE = _wb_exe()
+
+
+def wb_window_exists():
+    """WorkBuddy 窗口是否已存在（避免重复启动）。"""
+    try:
+        return bool(ctypes.windll.user32.FindWindowW(None, "WorkBuddy"))
+    except Exception:
+        return False
+
+
+def warm_up():
+    """提前拉起 WorkBuddy：冷启动要 1~2 分钟，到点才启动会等超时。"""
+    if wb_window_exists():
+        log("预热：WorkBuddy 已在运行，无需启动")
+        return
+    if not WB_EXE:
+        log("预热：未找到 WorkBuddy.exe，跳过")
+        return
+    if not os.path.exists(WB_EXE):
+        log("预热：启动路径不存在 %s" % WB_EXE)
+        return
+    try:
+        subprocess.Popen([WB_EXE], close_fds=True)
+        log("预热：已提前启动 WorkBuddy（避免到点冷启动超时）")
+    except Exception as e:
+        log("预热：启动失败 %s" % e)
 
 
 def log(msg):
@@ -220,6 +272,14 @@ def _main_loop():
         if st.get("retry_date") != today:
             retries = 0
             st["retry_date"] = today
+            save_state(st)
+
+        # 目标时间前 10 分钟预热：提前把 WorkBuddy 拉起来，到点直接是热窗口
+        if (st.get("last_run") != today
+                and st.get("warmup_date") != today
+                and (now.hour, now.minute) >= (WARMUP_HOUR, WARMUP_MINUTE)):
+            warm_up()
+            st["warmup_date"] = today
             save_state(st)
 
         if st.get("last_run") != today and now.hour >= TARGET_HOUR:
