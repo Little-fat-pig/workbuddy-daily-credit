@@ -52,6 +52,12 @@ WARMUP_HOUR = TARGET_HOUR
 WARMUP_MINUTE = (TARGET_MINUTE - 10) % 60
 if TARGET_MINUTE < 10:
     WARMUP_HOUR = (TARGET_HOUR - 1) % 24
+# 每天尝试的补领时段：主时间 +5 小时 +11 小时（上午失手，下午晚上还有机会）
+CHECKPOINTS = [
+    (TARGET_HOUR, TARGET_MINUTE),
+    ((TARGET_HOUR + 5) % 24, TARGET_MINUTE),
+    ((TARGET_HOUR + 11) % 24, TARGET_MINUTE),
+]
 MAX_RETRY = 8
 RETRY_GAP = 20 * 60
 
@@ -282,10 +288,24 @@ def _main_loop():
             st["warmup_date"] = today
             save_state(st)
 
-        if st.get("last_run") != today and now.hour >= TARGET_HOUR:
+        # 找「今天已经到点的最后一个补领时段」
+        due = None
+        for (h, m) in CHECKPOINTS:
+            if (now.hour, now.minute) >= (h % 24, m):
+                due = (h % 24, m)
+        due_key = "%02d:%02d" % due if due else None
+
+        # 换时段就清零重试计数（每个时段各有 MAX_RETRY 次机会）
+        if due_key and st.get("cp_key") != due_key:
+            retries = 0
+            st["cp_key"] = due_key
+            save_state(st)
+
+        if st.get("last_run") != today and due_key and st.get("cp_done") != today + due_key:
             ok = run_claim()
             if ok:
                 st["last_run"] = today
+                st["cp_done"] = today + due_key
                 st["last_result"] = "ok"
                 save_state(st)
             else:
@@ -293,20 +313,29 @@ def _main_loop():
                 st["last_result"] = "fail_%d" % retries
                 save_state(st)
                 if retries >= MAX_RETRY:
-                    log("今日重试已达上限，跳过（明天再试）")
-                    st["last_run"] = today
+                    log("%s 时段重试用尽，等下一个补领时间点" % due_key)
+                    st["cp_done"] = today + due_key
                     save_state(st)
                 else:
                     log("第 %d 次失败，%d 分钟后再试" % (retries, RETRY_GAP // 60))
                     time.sleep(RETRY_GAP)
                     continue
-            # 跑完（无论成败）等到下一个整点目标
+            # 跑完（无论成败）稍等再进入下一轮
             time.sleep(60)
             continue
 
-        # 未到时间：分段睡眠，最多 120 秒醒一次，便于系统休眠恢复后及时校正
-        target = next_target(now) if st.get("last_run") == today else \
-            now.replace(hour=TARGET_HOUR, minute=TARGET_MINUTE, second=0, microsecond=0)
+        # 未到时间：算出下一个该醒的时间点（今天剩余的补领时段，或明天主时间）
+        if st.get("last_run") == today:
+            target = next_target(now)
+        else:
+            target = None
+            for (h, m) in CHECKPOINTS:
+                c = now.replace(hour=h % 24, minute=m, second=0, microsecond=0)
+                if c > now:
+                    target = c
+                    break
+            if target is None:
+                target = next_target(now)
         if target <= now:
             target = now + timedelta(seconds=60)
         remain = (target - now).total_seconds()
